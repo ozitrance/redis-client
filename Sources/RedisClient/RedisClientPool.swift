@@ -20,6 +20,7 @@
 //
 
 import Foundation
+import Vapor
 import Pool
 
 // MARK: - RedisClientPool
@@ -35,7 +36,7 @@ import Pool
  */
 public final class RedisClientPool: Pool<RedisClient>, RedisClient {
 
-    public func execute(_ command: String, arguments: [String]? = nil) throws -> RedisClientResponse {
+    public func execute(_ command: String, arguments: [String]? = nil) throws -> Future<RedisClientResponse> {
 
         let client = try self.draw()
 
@@ -46,31 +47,38 @@ public final class RedisClientPool: Pool<RedisClient>, RedisClient {
     }
 
     @discardableResult
-    public func multi(_ commands: (RedisClient, RedisClientTransaction) throws -> Void) throws -> [RedisClientResponse] {
+    public func multi(_ commands: @escaping (RedisClient, RedisClientTransaction) throws -> Void) throws -> Future<[RedisClientResponse]> {
 
         let client = try self.draw()
 
         defer { self.release(client) }
 
-        let response = try client.execute("MULTI", arguments: nil)
+        return try client.execute("MULTI", arguments: nil).flatMap(to: [RedisClientResponse].self){
+            response in
+            
+            guard response.status == .ok else {
+                throw RedisClientError.invalidResponse(response)
+            }
+            
+            do {
+                try commands(client, RedisClientTransaction())
+            } catch {
+                _ = try client.execute("DISCARD", arguments: nil)
+                throw RedisClientError.transactionAborted
+            }
+            
+            return try client.execute("EXEC", arguments: nil).map(to: [RedisClientResponse].self) {
+                execResponse in
+                guard let result = execResponse.array else {
+                    throw RedisClientError.invalidResponse(response)
+                }
+                
+                return result
+            }
+            
 
-        guard response.status == .ok else {
-            throw RedisClientError.invalidResponse(response)
+            
         }
 
-        do {
-            try commands(client, RedisClientTransaction())
-        } catch {
-            _ = try client.execute("DISCARD", arguments: nil)
-            throw RedisClientError.transactionAborted
-        }
-
-        let execResponse = try client.execute("EXEC", arguments: nil)
-
-        guard let result = execResponse.array else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result
     }
 }
