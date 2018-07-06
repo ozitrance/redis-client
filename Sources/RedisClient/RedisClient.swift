@@ -20,6 +20,7 @@
 //
 
 import Foundation
+import Vapor
 
 // MARK: - RedisClientError
 
@@ -34,17 +35,17 @@ public enum RedisClientError: Error {
 
 public protocol RedisClient {
 
-    func execute(_ command: String, arguments: [String]?) throws -> RedisClientResponse
+    func execute(_ command: String, arguments: [String]?) throws -> Future<RedisClientResponse>
 
     @discardableResult
-    func multi(_ commands: (RedisClient, RedisClientTransaction) throws -> Void) throws -> [RedisClientResponse]
+    func multi(_ commands: @escaping (RedisClient, RedisClientTransaction) throws -> Void) throws -> Future<[RedisClientResponse]>
 }
 
 // MARK: - Convenience Methods
 
 public extension RedisClient {
 
-    public func execute(_ command: String, arguments: String...) throws -> RedisClientResponse {
+    public func execute(_ command: String, arguments: String...) throws -> Future<RedisClientResponse> {
         return try self.execute(command, arguments: arguments)
     }
 }
@@ -52,127 +53,147 @@ public extension RedisClient {
 public extension RedisClient {
 
     @discardableResult
-    public func get(_ key: String) throws -> String? {
+    public func get(_ key: String) throws -> Future<String?> {
 
-        let response = try self.execute("GET", arguments: key)
+        return try self.execute("GET", arguments: key).map(to: String?.self){
+            response in
+            
+            switch response {
+            case .string(let value):
+                return value
+            case .null:
+                return nil
+            default:
+                throw RedisClientError.invalidResponse(response)
+            }
 
-        switch response {
-        case .string(let value):
-            return value
-        case .null:
-            return nil
-        default:
-            throw RedisClientError.invalidResponse(response)
+            
         }
+
     }
 
     @discardableResult
-    public func incr(_ key: String) throws -> Int64 {
+    public func incr(_ key: String) throws -> Future<Int64> {
 
-        let response = try self.execute("INCR", arguments: key)
+        return try self.execute("INCR", arguments: key).map(to: Int64.self){
+            response in
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
+            
+            return result
 
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
         }
 
-        return result
     }
 
     @discardableResult
-    public func del(_ keys: String...) throws -> Int64 {
+    public func del(_ keys: String...) throws -> Future<Int64> {
         return try self.del(keys)
     }
 
     @discardableResult
-    public func del(_ keys: [String]) throws -> Int64 {
+    public func del(_ keys: [String]) throws -> Future<Int64> {
 
-        let response = try self.execute("DEL", arguments: keys)
+        return try self.execute("DEL", arguments: keys).map(to: Int64.self){
+            response in
 
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result
         }
-
-        return result
     }
 
     @discardableResult
-    public func lpush(_ key: String, values: String...) throws -> Int64 {
+    public func lpush(_ key: String, values: String...) throws -> Future<Int64> {
         return try self.lpush(key, values: values)
     }
 
     @discardableResult
-    public func lpush(_ key: String, values: [String]) throws -> Int64 {
+    public func lpush(_ key: String, values: [String]) throws -> Future<Int64> {
 
         var arguments = [key]
         arguments.append(contentsOf: values)
 
-        let response = try self.execute("LPUSH", arguments: arguments)
+        return try self.execute("LPUSH", arguments: arguments).map(to: Int64.self){
+            response in
 
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result
         }
-
-        return result
     }
 
     @discardableResult
-    public func rpush(_ key: String, values: String...) throws -> Int64 {
+    public func rpush(_ key: String, values: String...) throws -> Future<Int64> {
         return try self.rpush(key, values: values)
     }
 
     @discardableResult
-    public func rpush(_ key: String, values: [String]) throws -> Int64 {
+    public func rpush(_ key: String, values: [String]) throws -> Future<Int64> {
 
         var arguments = [key]
         arguments.append(contentsOf: values)
 
-        let response = try self.execute("RPUSH", arguments: arguments)
+        return try self.execute("RPUSH", arguments: arguments).map(to: Int64.self){
+            response in
 
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
-        }
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
 
         return result
-    }
-
-    @discardableResult
-    public func rpoplpush(source: String, destination: String) throws -> String? {
-
-        let response = try self.execute("RPOPLPUSH", arguments: [source, destination])
-
-        switch response {
-        case .string(let value):
-            return value
-        case .null:
-            return nil
-        default:
-            throw RedisClientError.invalidResponse(response)
         }
     }
 
     @discardableResult
-    public func brpoplpush(source: String, destination: String, count: Int = 0) throws -> String {
+    public func rpoplpush(source: String, destination: String) throws -> Future<String?> {
 
-        let response = try self.execute("BRPOPLPUSH", arguments: [source, destination, String(count)])
+        return try self.execute("RPOPLPUSH", arguments: [source, destination]).map(to: String?.self){
+            response in
 
-        guard let result = response.string else {
-            throw RedisClientError.invalidResponse(response)
+            switch response {
+            case .string(let value):
+                return value
+            case .null:
+                return nil
+            default:
+                throw RedisClientError.invalidResponse(response)
+            }
         }
+    }
 
-        return result
+    @discardableResult
+    public func brpoplpush(source: String, destination: String, count: Int = 0) throws -> Future<String> {
+
+        return try self.execute("BRPOPLPUSH", arguments: [source, destination, String(count)]).map(to: String.self){
+            response in
+
+            guard let result = response.string else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result
+        }
     }
 
     public func setex(_ key: String, timeout: TimeInterval, value: String) throws {
 
-        let response = try self.execute("SETEX", arguments: [key, String(Int(timeout)), value])
-
-        guard response.status == .ok else {
-            throw RedisClientError.invalidResponse(response)
+        _ = try self.execute("SETEX", arguments: [key, String(Int(timeout)), value]).map(to: Void.self){
+            response in
+            
+            guard response.status == .ok else {
+                throw RedisClientError.invalidResponse(response)
+            }
         }
     }
 
     @discardableResult
-    public func lrem(_ key: String, value: String, count: Int? = nil) throws -> Int64 {
+    public func lrem(_ key: String, value: String, count: Int? = nil) throws -> Future<Int64> {
 
         var arguments = [key]
         if let count = count {
@@ -180,34 +201,38 @@ public extension RedisClient {
         }
         arguments.append(value)
 
-        let response = try self.execute("LREM", arguments: arguments)
+        return try self.execute("LREM", arguments: arguments).map(to: Int64.self){
+            response in
 
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result
         }
-
-        return result
     }
 
     @discardableResult
-    public func lrange(_ key: String, start: Int, stop: Int) throws -> [String] {
+    public func lrange(_ key: String, start: Int, stop: Int) throws -> Future<[String]> {
 
-        let response = try self.execute("LRANGE", arguments: [key, String(start), String(stop)])
+        return try self.execute("LRANGE", arguments: [key, String(start), String(stop)]).map(to: [String].self){
+            response in
 
-        guard let result = response.array else {
-            throw RedisClientError.invalidResponse(response)
+            guard let result = response.array else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result.flatMap { $0.string }
         }
-
-        return result.flatMap { $0.string }
     }
 
     @discardableResult
-    public func zadd(_ key: String, values: (score: Double, member: String)...) throws -> Int64 {
+    public func zadd(_ key: String, values: (score: Double, member: String)...) throws -> Future<Int64> {
         return try self.zadd(key, values: values)
     }
 
     @discardableResult
-    public func zadd(_ key: String, values: [(score: Double, member: String)]) throws -> Int64 {
+    public func zadd(_ key: String, values: [(score: Double, member: String)]) throws -> Future<Int64> {
 
         var arguments = [key]
 
@@ -216,29 +241,33 @@ public extension RedisClient {
             arguments.append(value.member)
         }
 
-        let response = try self.execute("ZADD", arguments: arguments)
+        return try self.execute("ZADD", arguments: arguments).map(to: Int64.self){
+            response in
 
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result
         }
-
-        return result
     }
 
     @discardableResult
-    public func zrange(_ key: String, start: Int, stop: Int) throws -> [String] {
+    public func zrange(_ key: String, start: Int, stop: Int) throws -> Future<[String]> {
 
-        let response = try self.execute("ZRANGE", arguments: [key, String(start), String(stop)])
+        return try self.execute("ZRANGE", arguments: [key, String(start), String(stop)]).map(to: [String].self){
+            response in
 
-        guard let result = response.array else {
-            throw RedisClientError.invalidResponse(response)
+            guard let result = response.array else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result.flatMap { $0.string }
         }
-
-        return result.flatMap { $0.string }
     }
 
     @discardableResult
-    public func zrangebyscore(_ key: String, min: Double, max: Double, includeMin: Bool = false, includeMax: Bool = true) throws -> [String] {
+    public func zrangebyscore(_ key: String, min: Double, max: Double, includeMin: Bool = false, includeMax: Bool = true) throws -> Future<[String]> {
 
         var arguments = [key]
 
@@ -248,25 +277,29 @@ public extension RedisClient {
         arguments.append(String(minArg))
         arguments.append(String(maxArg))
 
-        let response = try self.execute("ZRANGEBYSCORE", arguments: arguments)
+        return try self.execute("ZRANGEBYSCORE", arguments: arguments).map(to: [String].self){
+            response in
 
-        guard let result = response.array else {
-            throw RedisClientError.invalidResponse(response)
-        }
+            guard let result = response.array else {
+                throw RedisClientError.invalidResponse(response)
+            }
 
         return result.flatMap { $0.string }
+        }
     }
 
     @discardableResult
-    public func zrem(_ key: String, member: String) throws -> Int64 {
+    public func zrem(_ key: String, member: String) throws -> Future<Int64> {
 
-        let response = try self.execute("ZREM", arguments: [key, member])
+        return try self.execute("ZREM", arguments: [key, member]).map(to: Int64.self){
+            response in
 
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result
         }
-
-        return result
     }
 }
 
@@ -289,27 +322,34 @@ public struct RedisClientTransaction {
 public extension RedisClient {
 
     @discardableResult
-    public func multi(_ commands: (RedisClient, RedisClientTransaction) throws -> Void) throws -> [RedisClientResponse] {
+    public func multi(_ commands: @escaping (RedisClient, RedisClientTransaction) throws -> Void) throws -> Future<[RedisClientResponse]> {
 
-        let response = try self.execute("MULTI", arguments: nil)
+        return try self.execute("MULTI", arguments: nil).flatMap(to: [RedisClientResponse].self){
+            response in
 
-        guard response.status == .ok else {
-            throw RedisClientError.invalidResponse(response)
+            guard response.status == .ok else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            do {
+                try commands(self, RedisClientTransaction())
+            } catch {
+                _ = try self.execute("DISCARD", arguments: nil).map(to: RedisClientResponse.self){
+                    response in
+                    throw RedisClientError.transactionAborted
+
+                }
+            }
+
+            return try self.execute("EXEC", arguments: nil).map(to: [RedisClientResponse].self){
+                execResponse in
+                
+                guard let result = execResponse.array else {
+                    throw RedisClientError.invalidResponse(response)
+                }
+
+                return result
+            }
         }
-
-        do {
-            try commands(self, RedisClientTransaction())
-        } catch {
-            _ = try self.execute("DISCARD", arguments: nil)
-            throw RedisClientError.transactionAborted
-        }
-
-        let execResponse = try self.execute("EXEC", arguments: nil)
-
-        guard let result = execResponse.array else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result
     }
 }
