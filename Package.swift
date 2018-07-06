@@ -29,7 +29,7 @@ let package = Package(
 		.library(name: "RedisClient", targets: ["RedisClient"])
 	],
 	dependencies: [
-		.package(url: "https://github.com/reswifq/pool.git", .upToNextMajor(from: "1.3.0"))
+		.package(url: "https://github.com/ozitrance/pool.git", .branch("vapor3")),
 	],
 	targets: [
 		.target(name: "RedisClient", dependencies: ["Pool"]),
