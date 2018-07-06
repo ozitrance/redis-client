@@ -30,6 +30,11 @@ let package = Package(
 	],
 	dependencies: [
 		.package(url: "https://github.com/ozitrance/pool.git", .branch("vapor3")),
+		.package(url: "https://github.com/vapor/vapor.git", .upToNextMajor(from: "3.0.0-rc")),
+	],
+	targets: [
+		.target(name: "Reswifq", dependencies: ["RedisClient", "Vapor"]),
+
 	],
 	targets: [
 		.target(name: "RedisClient", dependencies: ["Pool"]),
