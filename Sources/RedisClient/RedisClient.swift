@@ -1,8 +1,8 @@
 //
-//  Pool.swift
-//  Reswifq
+//  RedisClient.swift
+//  RedisClient
 //
-//  Created by Valerio Mazzeo on 26/02/2017.
+//  Created by Valerio Mazzeo on 23/02/2017.
 //  Copyright © 2017 VMLabs Limited. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify
@@ -20,106 +20,346 @@
 //
 
 import Foundation
-import Dispatch
+import Vapor
 
-open class Pool<T> {
+// MARK: - RedisClientError
 
-    // MARK: Initialization
+public enum RedisClientError: Error {
 
-    /**
-     - parameter maxElementCount: Specifies the maximum number of element that the pool can manage.
-     - parameter factory: Closure used to create new items for the pool.
-     */
-    public init(maxElementCount: Int, factory: @escaping () throws -> T) {
-        self.factory = factory
-        self.maxElementCount = maxElementCount
-        self.semaphore = DispatchSemaphore(value: maxElementCount)
+    case invalidResponse(RedisClientResponse)
+    case invalidResponseString(String)
+    case transactionAborted
+    case enqueueCommandError
+    case emptyResponse
+}
+
+// MARK: - RedisClient
+
+public protocol RedisClient {
+
+    func execute(_ command: String, arguments: [String]?) throws -> Future<RedisClientResponse>
+
+ //   @discardableResult
+    func multi() throws -> Future<(RedisClient, RedisClientTransaction, RedisClientResponse)>
+}
+
+// MARK: - Convenience Methods
+
+public extension RedisClient {
+
+    public func execute(_ command: String, arguments: String...) throws -> Future<RedisClientResponse> {
+        return try self.execute(command, arguments: arguments)
     }
+}
 
-    // MARK: Setting and Getting Attributes
+public extension RedisClient {
 
-    /// The maximum number of element that the pool can manage.
-    public let maxElementCount: Int
+    @discardableResult
+    public func get(_ key: String) throws -> Future<String?> {
 
-    /// Closure used to create new items for the pool.
-    public let factory: () throws -> T
-
-    // MARK: Storage
-
-    var elements = [T]()
-
-    var elementCount = 0
-
-    // MARK: Concurrency Management
-
-    private let queue = DispatchQueue(label: "com.reswifq.Pool")
-
-    private let semaphore: DispatchSemaphore
-
-    // MARK: Accessing Elements
-
-    /**
-     It draws an element from the pool.
-     This method creates a new element using the instance `factory` until it reaches `maxElementCount`,
-     in that case it returns an existing element from the pool or wait until one is available.
-
-     - returns: The first available element from the pool.
-     */
-    public func draw() throws -> T {
-
-        print("ThreadCheck - inside pool.draw()")
-        // when count reaches zero, calls to the semaphore will block
-        guard self.semaphore.wait(timeout: .distantFuture) == .success else {
-            throw PoolError.drawTimeOut
-        }
-
-        return try self.queue.sync {
-
-            guard self.elements.isEmpty, self.elementCount < self.maxElementCount else {
-                print("ThreadCheck - inside self.elements.isEmpty \(self.elements.isEmpty) self.elementCount \(self.elementCount) self.maxElementCount \(self.maxElementCount)")
-
-                // Use an existing element
-                return self.elements.removeFirst()
+        return try self.execute("GET", arguments: key).map(to: String?.self){
+            response in
+            
+            switch response {
+            case .string(let value):
+                return value
+            case .null:
+                return nil
+            default:
+                throw RedisClientError.invalidResponse(response)
             }
 
-            // Create a new element
-            do {
-                let element = try self.factory()
-                self.elementCount += 1
-                print("ThreadCheck - inside Create a new element \(element). self.elementCount \(self.elementCount)")
+            
+        }
 
-                return element
+    }
 
-            } catch {
-                self.semaphore.signal()
-                throw PoolError.factoryError(error)
+    @discardableResult
+    public func incr(_ key: String) throws -> Future<Int64> {
+
+        return try self.execute("INCR", arguments: key).map(to: Int64.self){
+            response in
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
+            
+            return result
+
+        }
+
+    }
+
+    @discardableResult
+    public func del(_ keys: String...) throws -> Future<Int64> {
+        return try self.del(keys)
+    }
+
+    @discardableResult
+    public func del(_ keys: [String]) throws -> Future<Int64> {
+
+        return try self.execute("DEL", arguments: keys).map(to: Int64.self){
+            response in
+
+        //    guard let result = response.integer else {
+         //       throw RedisClientError.invalidResponse(response)
+         //   }
+            print("DEL response \(response.status)")
+            // guard let result = response.integer else {
+            //      throw RedisClientError.invalidResponse(response)
+            //   }
+            
+            if response.status == .queued {
+                return -1
+            } else if let intResponse = response.integer {
+                return intResponse
+            } else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+        }
+    }
+
+    @discardableResult
+    public func lpush(_ key: String, values: String...) throws -> Future<Int64> {
+        return try self.lpush(key, values: values)
+    }
+
+    @discardableResult
+    public func lpush(_ key: String, values: [String]) throws -> Future<Int64> {
+
+        var arguments = [key]
+        arguments.append(contentsOf: values)
+
+        return try self.execute("LPUSH", arguments: arguments).map(to: Int64.self){
+            response in
+
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result
+        }
+    }
+
+    @discardableResult
+    public func rpush(_ key: String, values: String...) throws -> Future<Int64> {
+        return try self.rpush(key, values: values)
+    }
+
+    @discardableResult
+    public func rpush(_ key: String, values: [String]) throws -> Future<Int64> {
+
+        var arguments = [key]
+        arguments.append(contentsOf: values)
+
+        return try self.execute("RPUSH", arguments: arguments).map(to: Int64.self){
+            response in
+
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+        return result
+        }
+    }
+
+    @discardableResult
+    public func rpoplpush(source: String, destination: String) throws -> Future<String> {
+
+        return try self.execute("RPOPLPUSH", arguments: [source, destination]).map(to: String.self){
+            response in
+
+            switch response {
+            case .string(let value):
+                return value
+            case .null:
+                print("Null so not returning anything")
+                throw RedisClientError.emptyResponse
+            default:
+                throw RedisClientError.invalidResponse(response)
             }
         }
     }
 
-    /**
-     It returns a previously drawn element to the pool.
+    @discardableResult
+    public func brpoplpush(source: String, destination: String, count: Int = 0) throws -> Future<String> {
 
-     - parameter element: The element to put back in the pool.
-     */
-    public func release(_ element: T, completion: (() -> Void)? = nil) {
-        print("ThreadCheck - inside release")
+        return try self.execute("BRPOPLPUSH", arguments: [source, destination, String(count)]).map(to: String.self){
+            response in
 
-        self.queue.async {
-            self.elements.append(element)
-            self.semaphore.signal()
-            completion?()
+            guard let result = response.string else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result
         }
     }
 
-    deinit {
-        for _ in 0..<self.elementCount {
-            self.semaphore.signal()
+    public func setex(_ key: String, timeout: TimeInterval, value: String) throws -> Future<Void> {
+
+        return try self.execute("SETEX", arguments: [key, String(Int(timeout)), value]).map(to: Void.self){
+            response in
+            print("IM AFTER SETEX. Response is: \(response.status)")
+            guard response.status == .ok else {
+                throw RedisClientError.invalidResponse(response)
+            }
+        }
+    }
+
+    @discardableResult
+    public func lrem(_ key: String, value: String, count: Int? = nil) throws -> Future<Int64> {
+
+        var arguments = [key]
+        if let count = count {
+            arguments.append(String(count))
+        }
+        arguments.append(value)
+
+        return try self.execute("LREM", arguments: arguments).map(to: Int64.self){
+            response in
+
+            print("LREM response \(response.status)")
+           // guard let result = response.integer else {
+          //      throw RedisClientError.invalidResponse(response)
+         //   }
+            
+            if response.status == .queued {
+                return -1
+            } else if let intResponse = response.integer {
+                return intResponse
+            } else {
+                throw RedisClientError.invalidResponse(response)
+            }
+            
+
+
+        //    guard result == .queued else {
+         //      throw RedisClientError.
+        //    }
+           // return result
+        }
+    }
+
+    @discardableResult
+    public func lrange(_ key: String, start: Int, stop: Int) throws -> Future<[String]> {
+
+        return try self.execute("LRANGE", arguments: [key, String(start), String(stop)]).map(to: [String].self){
+            response in
+
+            guard let result = response.array else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result.flatMap { $0.string }
+        }
+    }
+
+    @discardableResult
+    public func zadd(_ key: String, values: (score: Double, member: String)...) throws -> Future<Int64> {
+        return try self.zadd(key, values: values)
+    }
+
+    @discardableResult
+    public func zadd(_ key: String, values: [(score: Double, member: String)]) throws -> Future<Int64> {
+
+        var arguments = [key]
+
+        for value in values {
+            arguments.append(String(value.score))
+            arguments.append(value.member)
+        }
+
+        return try self.execute("ZADD", arguments: arguments).map(to: Int64.self){
+            response in
+
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result
+        }
+    }
+
+    @discardableResult
+    public func zrange(_ key: String, start: Int, stop: Int) throws -> Future<[String]> {
+
+        return try self.execute("ZRANGE", arguments: [key, String(start), String(stop)]).map(to: [String].self){
+            response in
+
+            guard let result = response.array else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result.flatMap { $0.string }
+        }
+    }
+
+    @discardableResult
+    public func zrangebyscore(_ key: String, min: Double, max: Double, includeMin: Bool = false, includeMax: Bool = true) throws -> Future<[String]> {
+
+        var arguments = [key]
+
+        let minArg = includeMin ? String(min) : "(\(min)"
+        let maxArg = includeMax ? String(max) : "(\(max)"
+
+        arguments.append(String(minArg))
+        arguments.append(String(maxArg))
+
+        return try self.execute("ZRANGEBYSCORE", arguments: arguments).map(to: [String].self){
+            response in
+
+            guard let result = response.array else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+        return result.flatMap { $0.string }
+        }
+    }
+
+    @discardableResult
+    public func zrem(_ key: String, member: String) throws -> Future<Int64> {
+
+        return try self.execute("ZREM", arguments: [key, member]).map(to: Int64.self){
+            response in
+
+            guard let result = response.integer else {
+                throw RedisClientError.invalidResponse(response)
+            }
+
+            return result
         }
     }
 }
 
-public enum PoolError: Swift.Error {
-    case drawTimeOut
-    case factoryError(Swift.Error)
+// MARK: - Transactions
+
+public struct RedisClientTransaction {
+
+    public func enqueue(_ command: () throws -> Void) throws {
+        do {
+            try command()
+            throw RedisClientError.enqueueCommandError
+        } catch RedisClientError.invalidResponse(let response) {
+            guard response.status == .queued else {
+                throw RedisClientError.invalidResponse(response)
+            }
+        }
+    }
+}
+
+public extension RedisClient {
+
+   // @discardableResult
+    public func multi() throws -> Future<(RedisClient, RedisClientTransaction, RedisClientResponse)> {
+
+        print("ThreadCheck - Before MULTI")
+        return try self.execute("MULTI", arguments: nil).map(to: (RedisClient, RedisClientTransaction, RedisClientResponse).self){
+            response in
+            
+            guard response.status == .ok else {
+                throw RedisClientError.invalidResponse(response)
+            }
+            return (self, RedisClientTransaction(), response)
+        }
+    }
 }
