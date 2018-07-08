@@ -1,8 +1,8 @@
 //
-//  RedisClient.swift
-//  RedisClient
+//  Worker.swift
+//  Reswifq
 //
-//  Created by Valerio Mazzeo on 23/02/2017.
+//  Created by Valerio Mazzeo on 22/02/2017.
 //  Copyright © 2017 VMLabs Limited. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify
@@ -20,296 +20,178 @@
 //
 
 import Foundation
+import Dispatch
+import Vapor
+//import RedisClient
 
-// MARK: - RedisClientError
+public class Worker {
 
-public enum RedisClientError: Error {
+    // MARK: Initialization
 
-    case invalidResponse(RedisClientResponse)
-    case transactionAborted
-    case enqueueCommandError
-}
-
-// MARK: - RedisClient
-
-public protocol RedisClient {
-
-    func execute(_ command: String, arguments: [String]?) throws -> RedisClientResponse
-
-    @discardableResult
-    func multi(_ commands: (RedisClient, RedisClientTransaction) throws -> Void) throws -> [RedisClientResponse]
-}
-
-// MARK: - Convenience Methods
-
-public extension RedisClient {
-
-    public func execute(_ command: String, arguments: String...) throws -> RedisClientResponse {
-        return try self.execute(command, arguments: arguments)
+    public init(queue: Queue, maxConcurrentJobs: Int = 10, averagePollingInterval: UInt32 = 0) {
+        self.queue = queue
+        self.maxConcurrentJobs = max(1, maxConcurrentJobs)
+        self.averagePollingInterval = averagePollingInterval
+        self.semaphore = DispatchSemaphore(value: maxConcurrentJobs)
     }
-}
 
-public extension RedisClient {
+    // MARK: Setting and Getting Attributes
 
-    @discardableResult
-    public func get(_ key: String) throws -> String? {
+    /// The source queue of the worker process.
+    public let queue: Queue
 
-        let response = try self.execute("GET", arguments: key)
+    /**
+     Defines the average amount of time (in seconds) which a worker's thread
+     has to sleep in between jobs processing.
 
-        switch response {
-        case .string(let value):
-            return value
-        case .null:
-            return nil
-        default:
-            throw RedisClientError.invalidResponse(response)
+     When a value of `0` is specified, the worker `dequeue`s jobs,
+     setting the wait parameter to `true`, asking the queue to block the thread
+     and return only when a job is available.
+    */
+    public let averagePollingInterval: UInt32
+
+    /**
+     The maximum number of concurrent jobs this worker process can handle at the same time.
+     The minimum value is capped to 1.
+     */
+    public let maxConcurrentJobs: Int
+
+    // MARK: Processing
+
+    private let group = DispatchGroup()
+
+    private let dispatchQueue = DispatchQueue(label: "com.reswifq.Worker", attributes: .concurrent)
+
+    private let semaphore: DispatchSemaphore
+
+    private var isCancelled: Bool = false
+
+    /**
+     Starts the worker processing and wait indefinitely.
+     */
+    public func run() throws {
+        self.isCancelled = false
+
+         //   guard self.semaphore.wait(timeout: .distantFuture) == .success else {
+         //      throw Abort(.badRequest) // Not sure if this can ever happen when using distantFuture
+        //    }
+   //     while !self.isCancelled {
+
+    //    group.enter()
+
+            print("ThreadCheck - before workItem - \(Thread.current). Time is \(Date().rfc1123)")
+          //  sleep(5)
+            print("before workItem")
+
+            _ = try self.makeWorkItem().map(to: Void.self) {
+                print("ThreadCheck - after running workitem - \(Thread.current). Time is \(Date().rfc1123)")
+             //   sleep(5)
+
+               // print("after running workitem")
+                if self.averagePollingInterval > 0 {
+                    sleep(seconds: random(self.averagePollingInterval))
+                }
+              //  self.group.leave()
+
+             //   self.semaphore.signal()
+                try self.run()
+
+            }
+     //   }
+        /*
+        self.isCancelled = false
+
+        while !self.isCancelled {
+
+
+       //     self.group.enter()
+
+            _ = try self.makeWorkItem().map(to: Void.self) {
+                
+                print("after running workitem")
+                if self.averagePollingInterval > 0 {
+                    sleep(seconds: random(self.averagePollingInterval))
+                }
+            //    self.isCancelled = false
+
+             //   self.semaphore.signal()
+                
+                //        self.group.leave()
+
+            }
+            
+        //    guard self.semaphore.wait(timeout: .distantFuture) == .success else {
+         //       continue // Not sure if this can ever happen when using distantFuture
+        //    }
+
+            /*
+            let workItem = try self.makeWorkItem {
+
+                print("after running workitem")
+                if self.averagePollingInterval > 0 {
+                    sleep(seconds: random(self.averagePollingInterval))
+                }
+
+          //      self.semaphore.signal()
+
+        //        self.group.leave()
+            }
+            */
+         //   print("About to run \(workItem)")
+      //      self.dispatchQueue.async(execute: workItem)
+        }*/
+    }
+
+    /**
+     Stops the worker processing. This is useful for testing purposes, but probably doesn't have any real case use other than that. 
+     */
+    public func stop(waitUntilAllJobsAreFinished: Bool = false) {
+
+        self.isCancelled = true
+
+        if waitUntilAllJobsAreFinished {
+            print("Need to waitUntilAllJobsAreFinished")
+        //    self.group.wait()
         }
     }
-
-    @discardableResult
-    public func incr(_ key: String) throws -> Int64 {
-
-        let response = try self.execute("INCR", arguments: key)
-
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result
-    }
-
-    @discardableResult
-    public func del(_ keys: String...) throws -> Int64 {
-        return try self.del(keys)
-    }
-
-    @discardableResult
-    public func del(_ keys: [String]) throws -> Int64 {
-
-        let response = try self.execute("DEL", arguments: keys)
-
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result
-    }
-
-    @discardableResult
-    public func lpush(_ key: String, values: String...) throws -> Int64 {
-        return try self.lpush(key, values: values)
-    }
-
-    @discardableResult
-    public func lpush(_ key: String, values: [String]) throws -> Int64 {
-
-        var arguments = [key]
-        arguments.append(contentsOf: values)
-
-        let response = try self.execute("LPUSH", arguments: arguments)
-
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result
-    }
-
-    @discardableResult
-    public func rpush(_ key: String, values: String...) throws -> Int64 {
-        return try self.rpush(key, values: values)
-    }
-
-    @discardableResult
-    public func rpush(_ key: String, values: [String]) throws -> Int64 {
-
-        var arguments = [key]
-        arguments.append(contentsOf: values)
-
-        let response = try self.execute("RPUSH", arguments: arguments)
-
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result
-    }
-
-    @discardableResult
-    public func rpoplpush(source: String, destination: String) throws -> String? {
-
-        let response = try self.execute("RPOPLPUSH", arguments: [source, destination])
-
-        switch response {
-        case .string(let value):
-            return value
-        case .null:
-            return nil
-        default:
-            throw RedisClientError.invalidResponse(response)
+    /*
+    public func complete(_ job: JobID) throws {
+        self.dispatchQueue.async {
+            self.jobs[job] = nil
         }
     }
+    */
+    
+    private func makeBDequeueWorkItem() throws -> Future<Void> {
 
-    @discardableResult
-    public func brpoplpush(source: String, destination: String, count: Int = 0) throws -> String {
-
-        let response = try self.execute("BRPOPLPUSH", arguments: [source, destination, String(count)])
-
-        guard let result = response.string else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result
-    }
-
-    public func setex(_ key: String, timeout: TimeInterval, value: String) throws {
-
-        let response = try self.execute("SETEX", arguments: [key, String(Int(timeout)), value])
-
-        guard response.status == .ok else {
-            throw RedisClientError.invalidResponse(response)
+     //   let app = try Application()
+        return try self.queue.bdequeue().flatMap(to: Void.self){
+            persistedJob in
+            return try persistedJob.job.perform().flatMap(to: Void.self) {
+                return try self.queue.complete(persistedJob.identifier).map(to: Void.self){}
+            }
+            
         }
     }
-
-    @discardableResult
-    public func lrem(_ key: String, value: String, count: Int? = nil) throws -> Int64 {
-
-        var arguments = [key]
-        if let count = count {
-            arguments.append(String(count))
-        }
-        arguments.append(value)
-
-        let response = try self.execute("LREM", arguments: arguments)
-
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result
-    }
-
-    @discardableResult
-    public func lrange(_ key: String, start: Int, stop: Int) throws -> [String] {
-
-        let response = try self.execute("LRANGE", arguments: [key, String(start), String(stop)])
-
-        guard let result = response.array else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result.flatMap { $0.string }
-    }
-
-    @discardableResult
-    public func zadd(_ key: String, values: (score: Double, member: String)...) throws -> Int64 {
-        return try self.zadd(key, values: values)
-    }
-
-    @discardableResult
-    public func zadd(_ key: String, values: [(score: Double, member: String)]) throws -> Int64 {
-
-        var arguments = [key]
-
-        for value in values {
-            arguments.append(String(value.score))
-            arguments.append(value.member)
-        }
-
-        let response = try self.execute("ZADD", arguments: arguments)
-
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result
-    }
-
-    @discardableResult
-    public func zrange(_ key: String, start: Int, stop: Int) throws -> [String] {
-
-        let response = try self.execute("ZRANGE", arguments: [key, String(start), String(stop)])
-
-        guard let result = response.array else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result.flatMap { $0.string }
-    }
-
-    @discardableResult
-    public func zrangebyscore(_ key: String, min: Double, max: Double, includeMin: Bool = false, includeMax: Bool = true) throws -> [String] {
-
-        var arguments = [key]
-
-        let minArg = includeMin ? String(min) : "(\(min)"
-        let maxArg = includeMax ? String(max) : "(\(max)"
-
-        arguments.append(String(minArg))
-        arguments.append(String(maxArg))
-
-        let response = try self.execute("ZRANGEBYSCORE", arguments: arguments)
-
-        guard let result = response.array else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result.flatMap { $0.string }
-    }
-
-    @discardableResult
-    public func zrem(_ key: String, member: String) throws -> Int64 {
-
-        let response = try self.execute("ZREM", arguments: [key, member])
-
-        guard let result = response.integer else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result
-    }
-}
-
-// MARK: - Transactions
-
-public struct RedisClientTransaction {
-
-    public func enqueue(_ command: () throws -> Void) throws {
-        do {
-            try command()
-            throw RedisClientError.enqueueCommandError
-        } catch RedisClientError.invalidResponse(let response) {
-            guard response.status == .queued else {
-                throw RedisClientError.invalidResponse(response)
+    
+    private func makeDequeueWorkItem() throws -> Future<Void> {
+        
+        return try self.queue.dequeue().flatMap(to: Void.self){
+            persistedJob in
+            print("IM BACK HEREEEEEEEE ")
+            
+            return try persistedJob.job.perform().flatMap(to: Void.self) {
+                print("Back From Performing!")
+                return try self.queue.complete(persistedJob.identifier).map(to: Void.self){
+                    
+                    print("Back From complete")
+                }
             }
         }
     }
-}
-
-public extension RedisClient {
-
-    @discardableResult
-    public func multi(_ commands: (RedisClient, RedisClientTransaction) throws -> Void) throws -> [RedisClientResponse] {
-
-        let response = try self.execute("MULTI", arguments: nil)
-
-        guard response.status == .ok else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        do {
-            try commands(self, RedisClientTransaction())
-        } catch {
-            _ = try self.execute("DISCARD", arguments: nil)
-            throw RedisClientError.transactionAborted
-        }
-
-        let execResponse = try self.execute("EXEC", arguments: nil)
-
-        guard let result = execResponse.array else {
-            throw RedisClientError.invalidResponse(response)
-        }
-
-        return result
+    
+    private func makeWorkItem() throws -> Future<Void> {
+        let isPollingIntervalEqual = self.averagePollingInterval == 0
+        return isPollingIntervalEqual ? try makeBDequeueWorkItem() : try makeDequeueWorkItem()
     }
 }
