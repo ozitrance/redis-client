@@ -59,7 +59,7 @@ public extension RedisClient {
 
         return try self.execute("GET", arguments: key).map(to: String?.self){
             response in
-            
+           // print("Inside GET. RESPONSE: \(response)")
             switch response {
             case .string(let value):
                 return value
@@ -79,11 +79,11 @@ public extension RedisClient {
 
         return try self.execute("INCR", arguments: key).map(to: Int64.self){
             response in
-            guard let result = response.integer else {
+            guard let result = response.status else {
                 throw RedisClientError.invalidResponse(response)
             }
             
-            return result
+            return 1
 
         }
 
@@ -103,7 +103,7 @@ public extension RedisClient {
         //    guard let result = response.integer else {
          //       throw RedisClientError.invalidResponse(response)
          //   }
-            print("DEL response \(response.status)")
+          //  print("DEL response \(response.status)")
             // guard let result = response.integer else {
             //      throw RedisClientError.invalidResponse(response)
             //   }
@@ -121,7 +121,12 @@ public extension RedisClient {
 
     @discardableResult
     public func lpush(_ key: String, values: String...) throws -> Future<Int64> {
-        return try self.lpush(key, values: values)
+        return try self.lpush(key, values: values).map(to: Int64.self) {
+            result in
+       //     print("AFTER result IN lpushlpush. result: \(result)")
+
+            return result
+        }
     }
 
     @discardableResult
@@ -130,14 +135,17 @@ public extension RedisClient {
         var arguments = [key]
         arguments.append(contentsOf: values)
 
+      //  print("BEFORE LPUSH IN LPUSH")
         return try self.execute("LPUSH", arguments: arguments).map(to: Int64.self){
             response in
+         //   print("AFTER LPUSH IN LPUSH. response: \(response.status)")
 
-            guard let result = response.integer else {
+            guard let result = response.status else {
                 throw RedisClientError.invalidResponse(response)
             }
+         //   print("AFTER result IN LPUSH. result: \(result)")
 
-            return result
+            return 1
         }
     }
 
@@ -173,7 +181,7 @@ public extension RedisClient {
             case .string(let value):
                 return value
             case .null:
-                print("Null so not returning anything")
+           //     print("Null so not returning anything")
                 throw RedisClientError.emptyResponse
             default:
                 throw RedisClientError.invalidResponse(response)
@@ -199,7 +207,7 @@ public extension RedisClient {
 
         return try self.execute("SETEX", arguments: [key, String(Int(timeout)), value]).map(to: Void.self){
             response in
-            print("IM AFTER SETEX. Response is: \(response.status)")
+          //  print("IM AFTER SETEX. Response is: \(response.status)")
             guard response.status == .ok else {
                 throw RedisClientError.invalidResponse(response)
             }
@@ -218,7 +226,7 @@ public extension RedisClient {
         return try self.execute("LREM", arguments: arguments).map(to: Int64.self){
             response in
 
-            print("LREM response \(response.status)")
+       //     print("LREM response \(response.status)")
            // guard let result = response.integer else {
           //      throw RedisClientError.invalidResponse(response)
          //   }
@@ -352,7 +360,7 @@ public extension RedisClient {
    // @discardableResult
     public func multi() throws -> Future<(RedisClient, RedisClientTransaction, RedisClientResponse)> {
 
-        print("ThreadCheck - Before MULTI")
+   //     print("ThreadCheck - Before MULTI")
         return try self.execute("MULTI", arguments: nil).map(to: (RedisClient, RedisClientTransaction, RedisClientResponse).self){
             response in
             
