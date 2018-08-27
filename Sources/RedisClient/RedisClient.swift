@@ -138,14 +138,17 @@ public extension RedisClient {
       //  print("BEFORE LPUSH IN LPUSH")
         return try self.execute("LPUSH", arguments: arguments).map(to: Int64.self){
             response in
-         //   print("AFTER LPUSH IN LPUSH. response: \(response.status)")
-
-            guard let result = response.status else {
-                throw RedisClientError.invalidResponse(response)
+            print("AFTER LPUSH IN LPUSH. response: \(response.status, response.integer)")
+            
+            if let _ = response.status {
+                return 1
+            } else if let int = response.integer {
+                return int
+            } else {
+                print("RESPONSE IS NOT STATUS OR INT: \(response)")
+                return 0
             }
-         //   print("AFTER result IN LPUSH. result: \(result)")
 
-            return 1
         }
     }
 
@@ -257,7 +260,7 @@ public extension RedisClient {
             guard let result = response.array else {
                 throw RedisClientError.invalidResponse(response)
             }
-
+            
             return result.flatMap { $0.string }
         }
     }
